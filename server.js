@@ -1,6 +1,8 @@
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
+import https from "https";
+import { extrairCertificadoEChave, consultarSefazDistribuicao } from "./utils/sefaz-distribuicao.js";
 
 dotenv.config();
 
@@ -66,10 +68,34 @@ app.get("/certificado/status", validarToken, (req, res) => {
   });
 });
 
+/**
+ * POST /api/sefaz/distribuicao-dfe
+ * Consulta distribuição de DFe na SEFAZ
+ *
+ * Body esperado:
+ * {
+ *   "cnpj": "26993942000101",
+ *   "uf": "42",
+ *   "ambiente": "producao",
+ *   "ultimo_nsu": "0",
+ *   "tipo": "nfe"
+ * }
+ *
+ * Retorna:
+ * {
+ *   "success": true,
+ *   "cStat": "138",
+ *   "xMotivo": "Documento localizado",
+ *   "ultNSU": "000000000000123",
+ *   "maxNSU": "000000000000150",
+ *   "documentos": [...]
+ * }
+ */
 app.post("/api/sefaz/distribuicao-dfe", validarToken, async (req, res) => {
   try {
-    const { cnpj, uf, ambiente, ultimo_nsu, tipo } = req.body;
+    const { cnpj, uf, ambiente = "producao", ultimo_nsu = "0", tipo = "nfe" } = req.body;
 
+    // Validar parâmetros obrigatórios
     if (!cnpj) {
       return res.status(400).json({
         success: false,
@@ -84,6 +110,15 @@ app.post("/api/sefaz/distribuicao-dfe", validarToken, async (req, res) => {
       });
     }
 
+    // Validar tipo (por enquanto só NF-e)
+    if (tipo !== "nfe") {
+      return res.status(400).json({
+        success: false,
+        error: "Tipo deve ser 'nfe' (outros tipos em desenvolvimento)"
+      });
+    }
+
+    // Obter certificado e senha
     const certBase64 =
       process.env.CERTIFICADO_26993942000101_PFX_BASE64 ||
       process.env.CERTIFICADO_EATKITCHEN_PFX_BASE64;
@@ -92,69 +127,95 @@ app.post("/api/sefaz/distribuicao-dfe", validarToken, async (req, res) => {
       process.env.CERTIFICADO_26993942000101_SENHA ||
       process.env.CERTIFICADO_EATKITCHEN_SENHA;
 
-    console.log("Consulta recebida:", {
+    console.log("=".repeat(60));
+    console.log("Nova consulta SEFAZ recebida:");
+    console.log({
       cnpj,
       uf,
       ambiente,
       ultimo_nsu,
       tipo,
-      certificadoConfigurado: !!certBase64,
-      senhaConfigurada: !!certSenha
+      timestamp: new Date().toISOString()
     });
+    console.log("=".repeat(60));
 
+    // Validar certificado e senha
     if (!certBase64 || !certSenha) {
       return res.status(400).json({
         success: false,
         cStat: "CERTIFICADO_NAO_CONFIGURADO",
         xMotivo: "Certificado A1 ou senha não configurados nas variáveis do Railway.",
-        ultNSU: ultimo_nsu || "0",
-        maxNSU: "0",
+        ultNSU: String(ultimo_nsu).padStart(15, "0"),
+        maxNSU: "000000000000000",
         documentos: []
       });
     }
 
-    /*
-      CONSULTA REAL SEFAZ AINDA NÃO IMPLEMENTADA.
+    // Extrair certificado e chave
+    console.log("Extraindo certificado A1...");
+    const { cert, key } = await extrairCertificadoEChave(certBase64, certSenha);
+    console.log("✓ Certificado extraído com sucesso");
 
-      Este proxy já:
-      - está online;
-      - valida token;
-      - verifica se o certificado e senha estão configurados;
-      - recebe a requisição do Base44;
-      - retorna status técnico.
+    // Consultar SEFAZ
+    console.log("Iniciando consulta SEFAZ...");
+    const resultado = await consultarSefazDistribuicao(
+      cnpj,
+      uf,
+      ultimo_nsu,
+      cert,
+      key,
+      ambiente
+    );
 
-      Próximo passo:
-      implementar aqui a consulta real NFeDistribuicaoDFe usando:
-      - certificado A1 .pfx em Base64;
-      - senha do certificado;
-      - SOAP;
-      - mTLS;
-      - HTTP/1.1;
-      - ambiente produção;
-      - controle de NSU.
-    */
+    console.log("✓ Consulta SEFAZ realizada com sucesso");
+    console.log(`Resultado: cStat=${resultado.cStat}, documentos=${resultado.documentos.length}`);
 
-    return res.json({
-      success: false,
-      cStat: "PROXY_ONLINE_SEM_CONSULTA_REAL",
-      xMotivo: "Proxy online e certificado configurado, mas a consulta real à SEFAZ ainda precisa ser implementada.",
-      ultNSU: ultimo_nsu || "0",
-      maxNSU: "0",
-      documentos: []
-    });
+    // Garantir que certificado/senha/key nunca sejam retornados
+    return res.json(resultado);
 
   } catch (error) {
-    console.error("Erro no proxy SEFAZ:", error);
+    console.error("❌ Erro na consulta SEFAZ:", {
+      message: error.message,
+      stack: error.stack,
+      timestamp: new Date().toISOString()
+    });
 
     return res.status(500).json({
       success: false,
       cStat: "ERRO_PROXY",
-      xMotivo: "Erro interno no Proxy SEFAZ",
-      error: error.message
+      xMotivo: error.message || "Erro interno no Proxy SEFAZ",
+      ultNSU: req.body?.ultimo_nsu ? String(req.body.ultimo_nsu).padStart(15, "0") : "000000000000000",
+      maxNSU: "000000000000000",
+      documentos: []
     });
   }
 });
 
+// Tratamento de erro 404
+app.use((req, res) => {
+  res.status(404).json({
+    success: false,
+    error: "Endpoint não encontrado"
+  });
+});
+
+// Tratamento de erros global
+app.use((err, req, res, next) => {
+  console.error("Erro não tratado:", err);
+  res.status(500).json({
+    success: false,
+    error: "Erro interno do servidor"
+  });
+});
+
 app.listen(PORT, () => {
-  console.log(`Proxy SEFAZ rodando na porta ${PORT}`);
+  console.log(`\n🚀 Proxy SEFAZ rodando na porta ${PORT}`);
+  console.log(`📍 Ambiente: ${process.env.SEFAZ_AMBIENTE || "producao"}`);
+  console.log(`🔐 Token de proxy: ${PROXY_TOKEN ? "Configurado" : "NÃO CONFIGURADO"}`);
+  console.log("\nEndpoints disponíveis:");
+  console.log("  GET  /");
+  console.log("  GET  /health");
+  console.log("  GET  /certificado/status (requer Bearer Token)");
+  console.log("  POST /api/sefaz/distribuicao-dfe (requer Bearer Token)");
+  console.log("\n" + "=".repeat(60) + "\n");
 });
