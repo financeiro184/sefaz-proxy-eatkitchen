@@ -26,11 +26,43 @@ function validarToken(req, res, next) {
   next();
 }
 
+app.get("/", (req, res) => {
+  res.json({
+    success: true,
+    message: "Proxy SEFAZ Eat Kitchen online",
+    endpoints: {
+      health: "/health",
+      certificadoStatus: "/certificado/status",
+      distribuicaoDfe: "/api/sefaz/distribuicao-dfe"
+    }
+  });
+});
+
 app.get("/health", (req, res) => {
   res.json({
     success: true,
     message: "Proxy SEFAZ Eat Kitchen online",
     ambiente: process.env.SEFAZ_AMBIENTE || "producao"
+  });
+});
+
+app.get("/certificado/status", validarToken, (req, res) => {
+  const certBase64 =
+    process.env.CERTIFICADO_26993942000101_PFX_BASE64 ||
+    process.env.CERTIFICADO_EATKITCHEN_PFX_BASE64;
+
+  const certSenha =
+    process.env.CERTIFICADO_26993942000101_SENHA ||
+    process.env.CERTIFICADO_EATKITCHEN_SENHA;
+
+  res.json({
+    success: true,
+    certificadoConfigurado: !!certBase64,
+    senhaConfigurada: !!certSenha,
+    tamanhoBase64: certBase64 ? certBase64.length : 0,
+    message: certBase64 && certSenha
+      ? "Certificado e senha configurados no proxy."
+      : "Certificado ou senha ainda não configurados."
   });
 });
 
@@ -52,18 +84,60 @@ app.post("/api/sefaz/distribuicao-dfe", validarToken, async (req, res) => {
       });
     }
 
+    const certBase64 =
+      process.env.CERTIFICADO_26993942000101_PFX_BASE64 ||
+      process.env.CERTIFICADO_EATKITCHEN_PFX_BASE64;
+
+    const certSenha =
+      process.env.CERTIFICADO_26993942000101_SENHA ||
+      process.env.CERTIFICADO_EATKITCHEN_SENHA;
+
     console.log("Consulta recebida:", {
       cnpj,
       uf,
       ambiente,
       ultimo_nsu,
-      tipo
+      tipo,
+      certificadoConfigurado: !!certBase64,
+      senhaConfigurada: !!certSenha
     });
+
+    if (!certBase64 || !certSenha) {
+      return res.status(400).json({
+        success: false,
+        cStat: "CERTIFICADO_NAO_CONFIGURADO",
+        xMotivo: "Certificado A1 ou senha não configurados nas variáveis do Railway.",
+        ultNSU: ultimo_nsu || "0",
+        maxNSU: "0",
+        documentos: []
+      });
+    }
+
+    /*
+      CONSULTA REAL SEFAZ AINDA NÃO IMPLEMENTADA.
+
+      Este proxy já:
+      - está online;
+      - valida token;
+      - verifica se o certificado e senha estão configurados;
+      - recebe a requisição do Base44;
+      - retorna status técnico.
+
+      Próximo passo:
+      implementar aqui a consulta real NFeDistribuicaoDFe usando:
+      - certificado A1 .pfx em Base64;
+      - senha do certificado;
+      - SOAP;
+      - mTLS;
+      - HTTP/1.1;
+      - ambiente produção;
+      - controle de NSU.
+    */
 
     return res.json({
       success: false,
       cStat: "PROXY_ONLINE_SEM_CONSULTA_REAL",
-      xMotivo: "Proxy online, mas a consulta real à SEFAZ ainda precisa ser implementada.",
+      xMotivo: "Proxy online e certificado configurado, mas a consulta real à SEFAZ ainda precisa ser implementada.",
       ultNSU: ultimo_nsu || "0",
       maxNSU: "0",
       documentos: []
