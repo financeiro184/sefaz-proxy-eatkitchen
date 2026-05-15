@@ -1,0 +1,15 @@
+{
+  "name": "sefaz-proxy-comercozinha",
+  "version": "1.0.0",
+  "description": "Proxy SEFAZ para Eat Brain",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5"
+  }
+}
